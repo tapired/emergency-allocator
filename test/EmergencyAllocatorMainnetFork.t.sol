@@ -82,6 +82,7 @@ contract EmergencyAllocatorMainnetForkTest is Test {
 
         (bytes32 sourceMarketId, bytes32 idleMarketId, uint256 targetWithdrawable) =
             _prepareVaultV1Scenario(vault, morpho);
+        allocator.setDustThreshold(morpho.idToMarketParams(Id.wrap(sourceMarketId)).loanToken, 0);
 
         uint256 withdrawnAssets = allocator.emergencyReallocateVaultV1(V1_VAULT, sourceMarketId, idleMarketId);
 
@@ -103,6 +104,7 @@ contract EmergencyAllocatorMainnetForkTest is Test {
         assertGt(withdrawableAssets, 0, "no live v2 market");
 
         MarketParams memory marketParams = morpho.idToMarketParams(Id.wrap(marketId));
+        allocator.setDustThreshold(marketParams.loanToken, 0);
         (,,, uint256 availableLiquidityBefore,) = allocator.previewVaultV2Withdrawable(address(adapter), marketParams);
         (uint256 targetWithdrawable,) = _borrowToReduceLiquidity(
             IMorphoBorrowLike(address(morpho)), marketParams, withdrawableAssets, availableLiquidityBefore

@@ -35,6 +35,10 @@ interface IERC20Minimal {
     function balanceOf(address account) external view returns (uint256);
 }
 
+interface IERC20Metadata is IERC20Minimal {
+    function decimals() external view returns (uint8);
+}
+
 interface IMorpho {
     function accrueInterest(MarketParams memory marketParams) external;
     function idToMarketParams(Id id) external view returns (MarketParams memory);
@@ -62,9 +66,11 @@ contract EmergencyAllocator {
     error IdenticalMarketIds();
     error UnknownMarket(bytes32 marketId);
     error NoPosition(bytes32 marketId);
+    error MulticallFailed();
 
     event OwnerSet(address indexed oldOwner, address indexed newOwner);
     event OperatorSet(address indexed account, bool isOperator);
+    event DustThresholdSet(address indexed loanToken, uint256 oldDustThreshold, uint256 newDustThreshold);
     event VaultV1EmergencyReallocate(
         address indexed vault, bytes32 indexed marketId, bytes32 indexed idleMarketId, uint256 withdrawnAssets
     );
@@ -74,6 +80,8 @@ contract EmergencyAllocator {
 
     address public owner;
     mapping(address account => bool) public isOperator;
+    mapping(address loanToken => uint256) public customDustThreshold;
+    mapping(address loanToken => bool) public hasCustomDustThreshold;
 
     modifier onlyAuthorized() {
         if (msg.sender != owner && !isOperator[msg.sender]) revert Unauthorized();
@@ -97,6 +105,33 @@ contract EmergencyAllocator {
         if (msg.sender != owner) revert Unauthorized();
         isOperator[account] = newIsOperator;
         emit OperatorSet(account, newIsOperator);
+    }
+
+    function setDustThreshold(address loanToken, uint256 newDustThreshold) external {
+        if (msg.sender != owner) revert Unauthorized();
+        if (loanToken == address(0)) revert ZeroAddress();
+
+        uint256 oldDustThreshold = dustThreshold(loanToken);
+        customDustThreshold[loanToken] = newDustThreshold;
+        hasCustomDustThreshold[loanToken] = true;
+
+        emit DustThresholdSet(loanToken, oldDustThreshold, newDustThreshold);
+    }
+
+    function multicall(bytes[] calldata data) external returns (bytes[] memory results) {
+        results = new bytes[](data.length);
+
+        for (uint256 i; i < data.length; ++i) {
+            (bool success, bytes memory result) = address(this).delegatecall(data[i]);
+            if (!success) {
+                if (result.length == 0) revert MulticallFailed();
+
+                assembly ("memory-safe") {
+                    revert(add(result, 32), mload(result))
+                }
+            }
+            results[i] = result;
+        }
     }
 
     function previewMetaMorphoWithdrawable(address vault, bytes32 marketId)
@@ -149,8 +184,9 @@ contract EmergencyAllocator {
 
         (uint256 positionAssets,, uint256 withdrawableAssets) =
             _withdrawableForAccount(morpho, marketId, marketParams, vault);
+        uint256 marketDustThreshold = dustThreshold(marketParams.loanToken);
 
-        if (withdrawableAssets == 0) return 0;
+        if (withdrawableAssets < marketDustThreshold) return 0;
 
         MarketAllocation[] memory allocations = new MarketAllocation[](2);
         allocations[0] = MarketAllocation({marketParams: marketParams, assets: positionAssets - withdrawableAssets});
@@ -175,11 +211,16 @@ contract EmergencyAllocator {
         morpho.accrueInterest(marketParams);
 
         (,, withdrawnAssets) = _withdrawable(morpho, Id.wrap(marketId), marketParams, supplyShares);
-        if (withdrawnAssets == 0) return 0;
+        if (withdrawnAssets < dustThreshold(marketParams.loanToken)) return 0;
 
         IVaultV2(vault).deallocate(adapter, abi.encode(marketParams), withdrawnAssets);
 
         emit VaultV2EmergencyDeallocate(vault, adapter, marketId, withdrawnAssets);
+    }
+
+    function dustThreshold(address loanToken) public view returns (uint256) {
+        if (hasCustomDustThreshold[loanToken]) return customDustThreshold[loanToken];
+        return 10 ** IERC20Metadata(loanToken).decimals();
     }
 
     function _resolveMarket(IMorpho morpho, bytes32 marketId) internal view returns (MarketParams memory marketParams) {

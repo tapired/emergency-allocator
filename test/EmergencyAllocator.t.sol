@@ -29,7 +29,7 @@ contract EmergencyAllocatorTest is Test {
     bytes32 internal idleMarketId;
 
     function setUp() public {
-        asset = new MockERC20();
+        asset = new MockERC20(6);
         morpho = new MockMorpho();
         allocator = new EmergencyAllocator(address(this));
 
@@ -61,6 +61,7 @@ contract EmergencyAllocatorTest is Test {
         metaMorpho.setAllocator(address(allocator), true);
         metaMorpho.setMarketEnabled(sourceMarketId, true);
         metaMorpho.setMarketEnabled(idleMarketId, true);
+        allocator.setDustThreshold(address(asset), 0);
 
         morpho.setMarketState(sourceMarketId, 1_000, 1_000, 800);
         morpho.setSupplyShares(sourceMarketId, address(metaMorpho), 350);
@@ -81,6 +82,7 @@ contract EmergencyAllocatorTest is Test {
         adapter = new MockMorphoMarketV1AdapterV2(address(vaultV2), address(asset), morpho);
 
         vaultV2.setAllocator(address(allocator), true);
+        allocator.setDustThreshold(address(asset), 0);
 
         morpho.setMarketState(sourceMarketId, 700, 700, 580);
         morpho.setSupplyShares(sourceMarketId, address(adapter), 300);
@@ -126,6 +128,7 @@ contract EmergencyAllocatorTest is Test {
         metaMorpho.setAllocator(address(allocator), true);
         metaMorpho.setMarketEnabled(sourceMarketId, true);
         metaMorpho.setMarketEnabled(idleMarketId, true);
+        allocator.setDustThreshold(address(asset), 0);
 
         morpho.setMarketState(sourceMarketId, 1_000, 1_000, 1_000);
         morpho.setSupplyShares(sourceMarketId, address(metaMorpho), 350);
@@ -143,6 +146,7 @@ contract EmergencyAllocatorTest is Test {
         adapter = new MockMorphoMarketV1AdapterV2(address(vaultV2), address(asset), morpho);
 
         vaultV2.setAllocator(address(allocator), true);
+        allocator.setDustThreshold(address(asset), 0);
 
         morpho.setMarketState(sourceMarketId, 700, 700, 700);
         morpho.setSupplyShares(sourceMarketId, address(adapter), 300);
@@ -157,6 +161,81 @@ contract EmergencyAllocatorTest is Test {
         assertEq(adapter.supplyShares(sourceMarketId), 300);
     }
 
+    function test_emergencyReallocateVaultV1ReturnsZeroWhenBelowDustThreshold() public {
+        metaMorpho = new MockMetaMorphoV1_1(address(asset), morpho);
+        metaMorpho.setAllocator(address(allocator), true);
+        metaMorpho.setMarketEnabled(sourceMarketId, true);
+        metaMorpho.setMarketEnabled(idleMarketId, true);
+
+        allocator.setDustThreshold(address(asset), 250);
+
+        morpho.setMarketState(sourceMarketId, 1_000, 1_000, 800);
+        morpho.setSupplyShares(sourceMarketId, address(metaMorpho), 350);
+        asset.mint(address(morpho), 400);
+
+        uint256 withdrawnAssets =
+            allocator.emergencyReallocateVaultV1(address(metaMorpho), sourceMarketId, idleMarketId);
+
+        assertEq(withdrawnAssets, 0);
+        assertEq(morpho.position(Id.wrap(sourceMarketId), address(metaMorpho)).supplyShares, 350);
+        assertEq(morpho.position(Id.wrap(idleMarketId), address(metaMorpho)).supplyShares, 0);
+    }
+
+    function test_emergencyDeallocateVaultV2ReturnsZeroWhenBelowDustThreshold() public {
+        vaultV2 = new MockVaultV2(address(asset));
+        adapter = new MockMorphoMarketV1AdapterV2(address(vaultV2), address(asset), morpho);
+
+        vaultV2.setAllocator(address(allocator), true);
+        allocator.setDustThreshold(address(asset), 150);
+
+        morpho.setMarketState(sourceMarketId, 700, 700, 580);
+        morpho.setSupplyShares(sourceMarketId, address(adapter), 300);
+        adapter.setSupplyShares(sourceMarketId, 300);
+        asset.mint(address(morpho), 200);
+
+        uint256 withdrawnAssets =
+            allocator.emergencyDeallocateVaultV2(address(vaultV2), address(adapter), sourceMarketId);
+
+        assertEq(withdrawnAssets, 0);
+        assertEq(asset.balanceOf(address(vaultV2)), 0);
+        assertEq(morpho.position(Id.wrap(sourceMarketId), address(adapter)).supplyShares, 300);
+        assertEq(adapter.supplyShares(sourceMarketId), 300);
+    }
+
+    function test_multicallBatchesAuthorizedCalls() public {
+        bytes[] memory calls = new bytes[](2);
+        calls[0] = abi.encodeCall(EmergencyAllocator.setDustThreshold, (address(asset), 123));
+        calls[1] = abi.encodeCall(EmergencyAllocator.setOperator, (address(0xB0B), true));
+
+        bytes[] memory results = allocator.multicall(calls);
+
+        assertEq(results.length, 2);
+        assertEq(allocator.dustThreshold(address(asset)), 123);
+        assertTrue(allocator.isOperator(address(0xB0B)));
+    }
+
+    function test_dustThresholdDefaultsToOneWholeTokenWhenUnset() public view {
+        assertEq(allocator.dustThreshold(address(asset)), 1e6);
+    }
+
+    function test_emergencyReallocateVaultV1ReturnsZeroWhenBelowDefaultDustThreshold() public {
+        metaMorpho = new MockMetaMorphoV1_1(address(asset), morpho);
+        metaMorpho.setAllocator(address(allocator), true);
+        metaMorpho.setMarketEnabled(sourceMarketId, true);
+        metaMorpho.setMarketEnabled(idleMarketId, true);
+
+        morpho.setMarketState(sourceMarketId, 1_000_000, 1_000_000, 1);
+        morpho.setSupplyShares(sourceMarketId, address(metaMorpho), 999_999);
+        asset.mint(address(morpho), 1_000_000);
+
+        uint256 withdrawnAssets =
+            allocator.emergencyReallocateVaultV1(address(metaMorpho), sourceMarketId, idleMarketId);
+
+        assertEq(withdrawnAssets, 0);
+        assertEq(morpho.position(Id.wrap(sourceMarketId), address(metaMorpho)).supplyShares, 999_999);
+        assertEq(morpho.position(Id.wrap(idleMarketId), address(metaMorpho)).supplyShares, 0);
+    }
+
     function _marketId(MarketParams memory marketParams) internal pure returns (bytes32 marketId) {
         assembly ("memory-safe") {
             marketId := keccak256(marketParams, 160)
@@ -165,8 +244,13 @@ contract EmergencyAllocatorTest is Test {
 }
 
 contract MockERC20 is IERC20Minimal {
+    uint8 public immutable decimals;
     mapping(address account => uint256) public balanceOf;
     mapping(address owner => mapping(address spender => uint256)) public allowance;
+
+    constructor(uint8 decimals_) {
+        decimals = decimals_;
+    }
 
     function mint(address to, uint256 amount) external {
         balanceOf[to] += amount;
