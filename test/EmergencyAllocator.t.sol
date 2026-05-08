@@ -61,7 +61,7 @@ contract EmergencyAllocatorTest is Test {
         metaMorpho.setAllocator(address(allocator), true);
         metaMorpho.setMarketEnabled(sourceMarketId, true);
         metaMorpho.setMarketEnabled(idleMarketId, true);
-        allocator.setDustThreshold(address(asset), 0);
+        allocator.setDustThreshold(address(asset), 1);
 
         morpho.setMarketState(sourceMarketId, 1_000, 1_000, 800);
         morpho.setSupplyShares(sourceMarketId, address(metaMorpho), 350);
@@ -82,7 +82,7 @@ contract EmergencyAllocatorTest is Test {
         adapter = new MockMorphoMarketV1AdapterV2(address(vaultV2), address(asset), morpho);
 
         vaultV2.setAllocator(address(allocator), true);
-        allocator.setDustThreshold(address(asset), 0);
+        allocator.setDustThreshold(address(asset), 1);
 
         morpho.setMarketState(sourceMarketId, 700, 700, 580);
         morpho.setSupplyShares(sourceMarketId, address(adapter), 300);
@@ -128,7 +128,7 @@ contract EmergencyAllocatorTest is Test {
         metaMorpho.setAllocator(address(allocator), true);
         metaMorpho.setMarketEnabled(sourceMarketId, true);
         metaMorpho.setMarketEnabled(idleMarketId, true);
-        allocator.setDustThreshold(address(asset), 0);
+        allocator.setDustThreshold(address(asset), 1);
 
         morpho.setMarketState(sourceMarketId, 1_000, 1_000, 1_000);
         morpho.setSupplyShares(sourceMarketId, address(metaMorpho), 350);
@@ -146,7 +146,7 @@ contract EmergencyAllocatorTest is Test {
         adapter = new MockMorphoMarketV1AdapterV2(address(vaultV2), address(asset), morpho);
 
         vaultV2.setAllocator(address(allocator), true);
-        allocator.setDustThreshold(address(asset), 0);
+        allocator.setDustThreshold(address(asset), 1);
 
         morpho.setMarketState(sourceMarketId, 700, 700, 700);
         morpho.setSupplyShares(sourceMarketId, address(adapter), 300);
@@ -214,8 +214,13 @@ contract EmergencyAllocatorTest is Test {
         assertTrue(allocator.isOperator(address(0xB0B)));
     }
 
-    function test_dustThresholdDefaultsToOneWholeTokenWhenUnset() public view {
+    function test_dustThresholdDefaultsToOneMillionUnitsWhenUnset() public view {
         assertEq(allocator.dustThreshold(address(asset)), 1e6);
+    }
+
+    function test_setDustThresholdRevertsOnZeroThreshold() public {
+        vm.expectRevert(EmergencyAllocator.ZeroDustThreshold.selector);
+        allocator.setDustThreshold(address(asset), 0);
     }
 
     function test_emergencyReallocateVaultV1ReturnsZeroWhenBelowDefaultDustThreshold() public {
