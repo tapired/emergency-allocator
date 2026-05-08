@@ -93,7 +93,8 @@ contract EmergencyAllocator {
         owner = newOwner;
     }
 
-    function setOperator(address account, bool newIsOperator) external onlyAuthorized {
+    function setOperator(address account, bool newIsOperator) external {
+        if (msg.sender != owner) revert Unauthorized();
         isOperator[account] = newIsOperator;
         emit OperatorSet(account, newIsOperator);
     }
