@@ -86,7 +86,8 @@ contract EmergencyAllocator {
         emit OwnerSet(address(0), owner_);
     }
 
-    function setOwner(address newOwner) external onlyAuthorized {
+    function setOwner(address newOwner) external {
+        if (msg.sender != owner) revert Unauthorized();
         if (newOwner == address(0)) revert ZeroAddress();
         emit OwnerSet(owner, newOwner);
         owner = newOwner;
