@@ -43,7 +43,7 @@ contract EmergencyAllocatorTest is Test {
 
         idleMarket = MarketParams({
             loanToken: address(asset),
-            collateralToken: address(0xF00D),
+            collateralToken: address(0),
             oracle: address(0xFACE),
             irm: address(0x2222),
             lltv: 0

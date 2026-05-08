@@ -143,9 +143,9 @@ contract EmergencyAllocator {
 
         MarketParams memory marketParams = _resolveMarket(morpho, marketId);
         MarketParams memory idleMarketParams = _resolveMarket(morpho, idleMarketId);
+        if (idleMarketParams.collateralToken != address(0)) revert UnknownMarket(idleMarketId);
 
         morpho.accrueInterest(marketParams);
-        morpho.accrueInterest(idleMarketParams);
 
         (uint256 positionAssets,, uint256 withdrawableAssets) =
             _withdrawableForAccount(morpho, marketId, marketParams, vault);

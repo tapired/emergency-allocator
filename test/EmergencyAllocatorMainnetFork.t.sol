@@ -169,6 +169,10 @@ contract EmergencyAllocatorMainnetForkTest is Test {
         internal
         returns (bytes32 sourceMarketId, bytes32 idleMarketId, uint256 targetWithdrawable)
     {
+        idleMarketId = _findVaultV1IdleMarket(vault, morpho);
+        uint256 idleHeadroom = _idleHeadroom(vault, morpho, idleMarketId);
+        require(idleHeadroom != 0, "idle market has no headroom");
+
         uint256 length = vault.withdrawQueueLength();
 
         for (uint256 i; i < length; ++i) {
@@ -182,35 +186,8 @@ contract EmergencyAllocatorMainnetForkTest is Test {
                 allocator.previewMetaMorphoWithdrawable(V1_VAULT, candidateSource);
             if (sourceWithdrawable == 0) continue;
 
-            (bool found, bytes32 candidateIdle, uint256 candidateTargetWithdrawable) = _findBorrowableIdleMarket(
-                vault, morpho, candidateSource, sourceMarketParams, availableLiquidityBefore, sourceWithdrawable
-            );
-            if (!found) continue;
-
             sourceMarketId = candidateSource;
-            idleMarketId = candidateIdle;
-            targetWithdrawable = candidateTargetWithdrawable;
-            return (sourceMarketId, idleMarketId, targetWithdrawable);
-        }
-
-        revert("no borrowable v1 market pair");
-    }
-
-    function _findBorrowableIdleMarket(
-        IMainnetMetaMorphoV1 vault,
-        IMorpho morpho,
-        bytes32 sourceMarketId,
-        MarketParams memory sourceMarketParams,
-        uint256 availableLiquidityBefore,
-        uint256 sourceWithdrawable
-    ) internal returns (bool found, bytes32 idleMarketId, uint256 targetWithdrawable) {
-        uint256 length = vault.withdrawQueueLength();
-
-        for (uint256 j; j < length; ++j) {
-            bytes32 candidateIdle = vault.withdrawQueue(j);
-            if (candidateIdle == sourceMarketId) continue;
-
-            uint256 feasibleAssets = _idleFeasibleAssets(vault, morpho, candidateIdle, sourceWithdrawable);
+            uint256 feasibleAssets = _min(sourceWithdrawable, idleHeadroom);
             if (feasibleAssets == 0) continue;
 
             uint256 requestedWithdrawable = feasibleAssets > 1 ? feasibleAssets / 2 : feasibleAssets;
@@ -220,26 +197,42 @@ contract EmergencyAllocatorMainnetForkTest is Test {
             try this.tryBorrowMarket(address(morpho), sourceMarketParams, borrowAmount) returns (
                 uint256 borrowedAssets
             ) {
-                return (true, candidateIdle, availableLiquidityBefore - borrowedAssets);
+                targetWithdrawable = availableLiquidityBefore - borrowedAssets;
+                return (sourceMarketId, idleMarketId, targetWithdrawable);
             } catch {}
         }
 
-        return (false, bytes32(0), 0);
+        revert("no borrowable v1 market pair");
     }
 
-    function _idleFeasibleAssets(
-        IMainnetMetaMorphoV1 vault,
-        IMorpho morpho,
-        bytes32 idleMarketId,
-        uint256 sourceWithdrawable
-    ) internal view returns (uint256 feasibleAssets) {
+    function _findVaultV1IdleMarket(IMainnetMetaMorphoV1 vault, IMorpho morpho)
+        internal
+        view
+        returns (bytes32 idleMarketId)
+    {
+        uint256 length = vault.withdrawQueueLength();
+
+        for (uint256 j; j < length; ++j) {
+            bytes32 candidateIdle = vault.withdrawQueue(j);
+            MarketParams memory candidateParams = morpho.idToMarketParams(Id.wrap(candidateIdle));
+            if (candidateParams.collateralToken == address(0)) return candidateIdle;
+        }
+
+        revert("no idle market");
+    }
+
+    function _idleHeadroom(IMainnetMetaMorphoV1 vault, IMorpho morpho, bytes32 idleMarketId)
+        internal
+        view
+        returns (uint256)
+    {
         (uint184 cap, bool enabled,) = vault.config(idleMarketId);
         if (!enabled) return 0;
 
         uint256 idleAssets = _marketAssetsOf(morpho, idleMarketId, V1_VAULT);
         if (uint256(cap) <= idleAssets) return 0;
 
-        return _min(sourceWithdrawable, uint256(cap) - idleAssets);
+        return uint256(cap) - idleAssets;
     }
 
     function _borrowChunkFromMarket(
